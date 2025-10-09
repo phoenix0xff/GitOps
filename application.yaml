@@ -3,6 +3,8 @@ kind: Application
 metadata:
   name: myapp-argo-github-actions
   namespace: argocd
+  annotations: # added this and line below for argo notifications
+    notifications.argoproj.io/subscribe.on-deployed.webhook: dora-collector
 spec:
   project: default
 

@@ -5,7 +5,7 @@ metadata:
   namespace: argocd
   annotations:
     notifications.argoproj.io/subscribe.dora-on-deployed: dora-collector # changed this
-    appCommit: 4fa30f26f801eb9a6ed8349405186d60c1962fa6
+    appCommit: 3aa4eccd18056ab8a3045561a19d1d2746d53fe7
 spec:
   project: default
   source:

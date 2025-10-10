@@ -2,8 +2,6 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: node-app-deployment
-  annotations:
-    appCommit: 183d6c300eefcf6c11f8d7159e616666f6609875
 spec:
   replicas: 2
   selector:

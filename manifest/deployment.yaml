@@ -2,6 +2,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: node-app-deployment
+  annotations:
+    appCommit: b13913861522d8b7740851a5ff5058377e046436
 spec:
   replicas: 2
   selector:
@@ -13,7 +15,7 @@ spec:
         app: node-app
     spec:
       containers:
-      - name: node-app
-        image: ens19kav/my-app:fb2ce33058af8a6ed17a69c6642ec5cba7907757
-        ports:
-        - containerPort: 3000
+        - name: node-app
+          image: ens19kav/my-app:b13913861522d8b7740851a5ff5058377e046436
+          ports:
+            - containerPort: 3000

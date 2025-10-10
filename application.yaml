@@ -5,21 +5,19 @@ metadata:
   namespace: argocd
   annotations:
     notifications.argoproj.io/subscribe.dora-on-deployed: dora-collector # changed this
+    appCommit: eb8c0e03b67829ecbc04158e4d9f3d4c921b05ad
 spec:
   project: default
-
   source:
     repoURL: https://github.com/phoenix0xff/GitOps.git
     targetRevision: HEAD
     path: manifest
-  destination: 
+  destination:
     server: https://kubernetes.default.svc
     namespace: myapp
-
   syncPolicy:
     syncOptions:
-    - CreateNamespace=true
-
+      - CreateNamespace=true
     automated:
       selfHeal: true
       prune: true

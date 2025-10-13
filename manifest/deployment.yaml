@@ -14,6 +14,6 @@ spec:
     spec:
       containers:
         - name: node-app
-          image: ens19kav/my-app:5d00993b45b27a3a89bc2f634e0fdb7c6b6c5f60
+          image: ens19kav/my-app:5ca2105c861530bd5f0a692cabb812c160ec93d2
           ports:
             - containerPort: 3000

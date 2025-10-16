@@ -17,3 +17,9 @@ spec:
           image: ens19kav/my-app:439cf6158b65df48ba22dc28838550aa3c141fdb
           ports:
             - containerPort: 3000
+          readinessProbe:
+            httpGet:
+              path: /nonexistent-health # purposly wrong to trigger failure
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 5

@@ -14,12 +14,12 @@ spec:
     spec:
       containers:
         - name: node-app
-          image: ens19kav/my-app:5ca2105c861530bd5f0a692cabb812c160ec93d2
+          image: ens19kav/my-app:dccd00e8e60b21437a2713edf09d59ea25282a93
           ports:
             - containerPort: 3000
           readinessProbe:
             httpGet:
-              path: /nonexistent-health # purposly wrong to trigger failure
+              path: /health
               port: 3000
             initialDelaySeconds: 5
             periodSeconds: 5

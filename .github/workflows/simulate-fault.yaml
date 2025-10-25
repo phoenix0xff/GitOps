@@ -1,0 +1,65 @@
+name: Simulate Fault (GitOps - minimal)
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration_minutes:
+        description: Minutes to keep the fault before auto-fix
+        required: true
+        default: "5"
+
+env:
+  APP_NAME: node-app
+  MANIFEST_PATH: manifest/deployment.yaml
+  GIT_EMAIL: ${{ secrets.GIT_EMAIL }}
+  GIT_USERNAME: ${{ secrets.GIT_USERNAME }}
+  PERSONAL_ACCESS_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+
+jobs:
+  simulate-readiness-fault:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout manifests repo
+        uses: actions/checkout@v4
+        with:
+          token: ${{ env.PERSONAL_ACCESS_TOKEN }}
+
+      - name: Set up git
+        run: |
+          git config user.name  "${{ env.GIT_USERNAME }}"
+          git config user.email "${{ env.GIT_EMAIL }}"
+
+      - name: Install yq
+        uses: mikefarah/yq@v4.44.3
+
+      - name: Inject faulty readinessProbe
+        run: |
+          FILE="${{ env.MANIFEST_PATH }}"
+          APP="${{ env.APP_NAME }}"
+          echo "Injecting bad readinessProbe into $FILE"
+          cp "$FILE" "${FILE}.bak"
+
+          yq -i '
+            (.spec.template.spec.containers[] | select(.name == strenv(APP))).readinessProbe.httpGet.path = "/nonexistent-health"
+          ' "$FILE"
+
+          git add "$FILE"
+          git commit -m "FAULT start: readinessProbe broken for $APP"
+          git push
+
+      - name: Hold fault
+        run: |
+          echo "Keeping fault for ${{ github.event.inputs.duration_minutes }} minutes..."
+          sleep $(( 60 * ${{ github.event.inputs.duration_minutes }} ))
+
+      - name: Revert fault (auto-fix)
+        run: |
+          FILE="${{ env.MANIFEST_PATH }}"
+          echo "Reverting manifest to healthy state"
+          git revert --no-edit HEAD || {
+            echo "git revert failed; restoring backup"
+            cp "${FILE}.bak" "$FILE"
+            git add "$FILE"
+            git commit -m "FAULT end: restore original manifest"
+          }
+          git push

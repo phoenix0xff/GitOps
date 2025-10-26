@@ -29,51 +29,53 @@ jobs:
           git config user.name  "${{ env.GIT_USERNAME }}"
           git config user.email "${{ env.GIT_EMAIL }}"
 
-      - name: Install yq
-        uses: mikefarah/yq@v4.44.3
+      - name: Install yq (binary)
+        run: |
+          YQ_VER=v4.44.3
+          wget -q https://github.com/mikefarah/yq/releases/download/${YQ_VER}/yq_linux_amd64 -O /usr/local/bin/yq
+          chmod +x /usr/local/bin/yq
+          yq --version
 
       - name: Inject faulty readinessProbe
         id: inject
         shell: bash
         run: |
           set -euo pipefail
+          set -x
           FILE="${{ env.MANIFEST_PATH }}"
-          echo "Injecting bad readinessProbe into $FILE"
-          cp "$FILE" "${FILE}.bak"
+          echo "=== BEFORE ==="
+          yq e '.spec.template.spec.containers[0].readinessProbe' "$FILE" || true
 
-          # 1) Set/replace readinessProbe on the FIRST container (index 0)
+          # Flip readiness path to a guaranteed-bad endpoint
           yq -i '
-            .spec.template.spec.containers[0].readinessProbe =
-              {"httpGet":{"path":"/nonexistent-health","port":3000},"initialDelaySeconds":5,"periodSeconds":5}
+            .spec.template.spec.containers[0].readinessProbe.httpGet.path = "/nonexistent-health"
           ' "$FILE"
 
-          # 2) Bump an annotation to guarantee a change & rollout every run
+          # Force a rollout & ensure a textual diff even if path was already set
           export TS=$(date -u +%Y%m%d%H%M%S)
           yq -i '
             .spec.template.metadata.annotations = (.spec.template.metadata.annotations // {}) |
             .spec.template.metadata.annotations["sim-fault-run"] = strenv(TS)
           ' "$FILE"
 
-          echo "Preview (container[0] readinessProbe):"
+          echo "=== AFTER ==="
           yq e '.spec.template.spec.containers[0].readinessProbe' "$FILE" || true
-          echo "Preview (annotations):"
           yq e '.spec.template.metadata.annotations' "$FILE" || true
 
-          # 3) Commit ONLY if the file actually changed
+          echo "=== DIFF (working vs HEAD) ==="
+          git diff -- "$FILE" || true
+
+          # Only commit if the file actually changed
           if git diff --quiet -- "$FILE"; then
             echo "No content change detected; skipping commit."
             echo "changed=false" >> "$GITHUB_OUTPUT"
-          else
-            git add "$FILE"
-            # Allow commit to be a no-op without failing the job
-            if git commit -m "FAULT start: readinessProbe broken (sim-fault-run=$TS)"; then
-              git push
-              echo "changed=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "git commit made no changes; skipping push."
-              echo "changed=false" >> "$GITHUB_OUTPUT"
-            fi
+            exit 0
           fi
+
+          # Commit changes (tracked file), don't fail build if commit pushes nothing
+          git commit -am "FAULT start: readinessProbe broken (sim-fault-run=$TS)" || true
+          git push || true
+          echo "changed=true" >> "$GITHUB_OUTPUT"
 
       - name: Hold fault
         if: steps.inject.outputs.changed == 'true'
@@ -86,19 +88,24 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          set -x
           FILE="${{ env.MANIFEST_PATH }}"
           echo "Reverting manifest to healthy state"
 
+          # Prefer a clean revert of the commit we just made; fall back to explicit restore.
           if git revert --no-edit HEAD; then
-            git push
+            git push || true
           else
-            echo "git revert failed; restoring backup"
-            cp "${FILE}.bak" "$FILE"
+            # Explicit restore: set path back to "/" and remove the annotation
+            yq -i '
+              .spec.template.spec.containers[0].readinessProbe.httpGet.path = "/" |
+              .spec.template.metadata.annotations |= (del(.["sim-fault-run"]) // .)
+            ' "$FILE"
+
             if git diff --quiet -- "$FILE"; then
-              echo "Backup identical; nothing to commit."
+              echo "Nothing to commit after explicit restore."
             else
-              git add "$FILE"
-              git commit -m "FAULT end: restore original manifest"
-              git push
+              git commit -am "FAULT end: restore readinessProbe and annotations" || true
+              git push || true
             fi
           fi

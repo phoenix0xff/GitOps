@@ -39,7 +39,7 @@ jobs:
           echo "Injecting bad readinessProbe into $FILE"
           cp "$FILE" "${FILE}.bak"
 
-          # setting bad endpoint for readinessProbe
+          # setting invalid readinessProbe path
           yq -i '
             (.spec.template.spec.containers[] | select(.name == strenv(APP))).readinessProbe.httpGet.path = "/nonexistent-health"
           ' "$FILE"
@@ -47,9 +47,14 @@ jobs:
           echo "Preview of modified readinessProbe:"
           yq e '.spec.template.spec.containers[] | select(.name == strenv(APP)).readinessProbe' "$FILE"
 
-          git add "$FILE" || true
-          git commit -m "FAULT start: readinessProbe broken for $APP" || echo "No changes to commit"
-          git push || echo "Nothing new to push"
+          git add "$FILE"
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit — manifest may already be in faulty state."
+          else
+            git commit -m "FAULT start: readinessProbe broken for $APP"
+            git push
+          fi
 
       - name: Hold fault
         run: |

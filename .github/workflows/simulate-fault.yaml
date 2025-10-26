@@ -33,27 +33,40 @@ jobs:
         uses: mikefarah/yq@v4.44.3
 
       - name: Inject faulty readinessProbe
+        id: inject
+        shell: bash
         run: |
+          set -euo pipefail
           FILE="${{ env.MANIFEST_PATH }}"
           APP="${{ env.APP_NAME }}"
           echo "Injecting bad readinessProbe into $FILE"
           cp "$FILE" "${FILE}.bak"
 
-          # setting invalid readinessProbe path
+          # 1) Ensure readinessProbe exists, then set an invalid path
           yq -i '
-            (.spec.template.spec.containers[] | select(.name == strenv(APP))).readinessProbe.httpGet.path = "/nonexistent-health"
+            (.spec.template.spec.containers[] | select(.name == strenv(APP))).readinessProbe =
+              {"httpGet":{"path":"/nonexistent-health","port":3000},"initialDelaySeconds":5,"periodSeconds":5}
           ' "$FILE"
 
-          echo "Preview of modified readinessProbe:"
-          yq e '.spec.template.spec.containers[] | select(.name == strenv(APP)).readinessProbe' "$FILE"
+          # 2) New annotation to force a new rollout every run
+          TS=$(date -u +%Y%m%d%H%M%S)
+          yq -i '
+            .spec.template.metadata.annotations = (.spec.template.metadata.annotations // {}) |
+            .spec.template.metadata.annotations["sim-fault-run"] = strenv(TS)
+          ' "$FILE"
 
-          git add "$FILE"
+          echo "Preview of readinessProbe after edit:"
+          yq e '.spec.template.spec.containers[] | select(.name == strenv(APP)).readinessProbe' "$FILE" || true
 
-          if git diff --cached --quiet; then
-            echo "No changes to commit — manifest may already be in faulty state."
+          # 3) Commit only if there is an actual diff
+          if git diff --quiet -- "$FILE"; then
+            echo "No content change detected; skipping commit."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
           else
-            git commit -m "FAULT start: readinessProbe broken for $APP"
+            git add "$FILE"
+            git commit -m "FAULT start: readinessProbe broken for $APP (sim-fault-run=$TS)"
             git push
+            echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Hold fault

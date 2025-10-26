@@ -11,6 +11,8 @@ spec:
     metadata:
       labels:
         app: node-app
+      annotations:
+        sim-fault-run: "20251026163633"
     spec:
       containers:
         - name: node-app
@@ -19,7 +21,7 @@ spec:
             - containerPort: 3000
           readinessProbe:
             httpGet:
-              path: /
+              path: /nonexistent-health
               port: 3000
             initialDelaySeconds: 5
             periodSeconds: 5

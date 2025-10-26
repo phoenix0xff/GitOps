@@ -38,33 +38,41 @@ jobs:
         run: |
           set -euo pipefail
           FILE="${{ env.MANIFEST_PATH }}"
-          # EXPORT this so yq's strenv(APP) can see it
-          export APP="${{ env.APP_NAME }}"
-
-          echo "Injecting bad readinessProbe into $FILE for container '$APP'"
+          echo "Injecting bad readinessProbe into $FILE"
           cp "$FILE" "${FILE}.bak"
 
-          # Ensure the readinessProbe exists and set a guaranteed-bad path
+          # 1) Set/replace readinessProbe on the FIRST container (index 0)
           yq -i '
-            (.spec.template.spec.containers[] | select(.name == strenv(APP))).readinessProbe =
+            .spec.template.spec.containers[0].readinessProbe =
               {"httpGet":{"path":"/nonexistent-health","port":3000},"initialDelaySeconds":5,"periodSeconds":5}
           ' "$FILE"
 
-          echo "Containers present:"
-          yq e '.spec.template.spec.containers[].name' "$FILE" || true
+          # 2) Bump an annotation to guarantee a change & rollout every run
+          export TS=$(date -u +%Y%m%d%H%M%S)
+          yq -i '
+            .spec.template.metadata.annotations = (.spec.template.metadata.annotations // {}) |
+            .spec.template.metadata.annotations["sim-fault-run"] = strenv(TS)
+          ' "$FILE"
 
-          echo "Preview readinessProbe after edit:"
-          yq e '.spec.template.spec.containers[] | select(.name == strenv(APP)).readinessProbe' "$FILE" || true
+          echo "Preview (container[0] readinessProbe):"
+          yq e '.spec.template.spec.containers[0].readinessProbe' "$FILE" || true
+          echo "Preview (annotations):"
+          yq e '.spec.template.metadata.annotations' "$FILE" || true
 
-          # Commit only if there is an actual diff
+          # 3) Commit ONLY if the file actually changed
           if git diff --quiet -- "$FILE"; then
             echo "No content change detected; skipping commit."
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
             git add "$FILE"
-            git commit -m "FAULT start: readinessProbe broken for $APP"
-            git push
-            echo "changed=true" >> "$GITHUB_OUTPUT"
+            # Allow commit to be a no-op without failing the job
+            if git commit -m "FAULT start: readinessProbe broken (sim-fault-run=$TS)"; then
+              git push
+              echo "changed=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "git commit made no changes; skipping push."
+              echo "changed=false" >> "$GITHUB_OUTPUT"
+            fi
           fi
 
       - name: Hold fault
@@ -80,6 +88,7 @@ jobs:
           set -euo pipefail
           FILE="${{ env.MANIFEST_PATH }}"
           echo "Reverting manifest to healthy state"
+
           if git revert --no-edit HEAD; then
             git push
           else
@@ -93,20 +102,3 @@ jobs:
               git push
             fi
           fi
-
-      - name: Hold fault
-        run: |
-          echo "Keeping fault for ${{ github.event.inputs.duration_minutes }} minutes..."
-          sleep $(( 60 * ${{ github.event.inputs.duration_minutes }} ))
-
-      - name: Revert fault (auto-fix)
-        run: |
-          FILE="${{ env.MANIFEST_PATH }}"
-          echo "Reverting manifest to healthy state"
-          git revert --no-edit HEAD || {
-            echo "git revert failed; restoring backup"
-            cp "${FILE}.bak" "$FILE"
-            git add "$FILE"
-            git commit -m "FAULT end: restore original manifest"
-          }
-          git push

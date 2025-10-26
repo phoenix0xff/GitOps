@@ -38,35 +38,60 @@ jobs:
         run: |
           set -euo pipefail
           FILE="${{ env.MANIFEST_PATH }}"
-          APP="${{ env.APP_NAME }}"
-          echo "Injecting bad readinessProbe into $FILE"
+          # EXPORT this so yq's strenv(APP) can see it
+          export APP="${{ env.APP_NAME }}"
+
+          echo "Injecting bad readinessProbe into $FILE for container '$APP'"
           cp "$FILE" "${FILE}.bak"
 
-          # 1) Ensure readinessProbe exists, then set an invalid path
+          # Ensure the readinessProbe exists and set a guaranteed-bad path
           yq -i '
             (.spec.template.spec.containers[] | select(.name == strenv(APP))).readinessProbe =
               {"httpGet":{"path":"/nonexistent-health","port":3000},"initialDelaySeconds":5,"periodSeconds":5}
           ' "$FILE"
 
-          # 2) New annotation to force a new rollout every run
-          TS=$(date -u +%Y%m%d%H%M%S)
-          yq -i '
-            .spec.template.metadata.annotations = (.spec.template.metadata.annotations // {}) |
-            .spec.template.metadata.annotations["sim-fault-run"] = strenv(TS)
-          ' "$FILE"
+          echo "Containers present:"
+          yq e '.spec.template.spec.containers[].name' "$FILE" || true
 
-          echo "Preview of readinessProbe after edit:"
+          echo "Preview readinessProbe after edit:"
           yq e '.spec.template.spec.containers[] | select(.name == strenv(APP)).readinessProbe' "$FILE" || true
 
-          # 3) Commit only if there is an actual diff
+          # Commit only if there is an actual diff
           if git diff --quiet -- "$FILE"; then
             echo "No content change detected; skipping commit."
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
             git add "$FILE"
-            git commit -m "FAULT start: readinessProbe broken for $APP (sim-fault-run=$TS)"
+            git commit -m "FAULT start: readinessProbe broken for $APP"
             git push
             echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Hold fault
+        if: steps.inject.outputs.changed == 'true'
+        run: |
+          echo "Keeping fault for ${{ github.event.inputs.duration_minutes }} minutes..."
+          sleep $(( 60 * ${{ github.event.inputs.duration_minutes }} ))
+
+      - name: Revert fault (auto-fix)
+        if: steps.inject.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE="${{ env.MANIFEST_PATH }}"
+          echo "Reverting manifest to healthy state"
+          if git revert --no-edit HEAD; then
+            git push
+          else
+            echo "git revert failed; restoring backup"
+            cp "${FILE}.bak" "$FILE"
+            if git diff --quiet -- "$FILE"; then
+              echo "Backup identical; nothing to commit."
+            else
+              git add "$FILE"
+              git commit -m "FAULT end: restore original manifest"
+              git push
+            fi
           fi
 
       - name: Hold fault

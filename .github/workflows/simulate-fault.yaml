@@ -14,7 +14,7 @@ on:
         required: true
         default: "5"
 
-# below to prevent two simulations running at the same time (not sure if needed)
+# Prevent overlapping runs on the same branch
 concurrency:
   group: sim-fault-${{ github.ref }}
   cancel-in-progress: false
@@ -27,6 +27,7 @@ env:
 
 jobs:
   simulate-readiness-fault:
+    if: ${{ github.event.inputs.fault == 'readiness' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout manifests repo
@@ -52,19 +53,18 @@ jobs:
           set -euo pipefail
           FILE="${{ env.MANIFEST_PATH }}"
 
-          # Flip readiness path to a guaranteed-bad endpoint
+          # Break readiness probe
           yq -i '
             .spec.template.spec.containers[0].readinessProbe.httpGet.path = "/nonexistent-health"
           ' "$FILE"
 
-          # Force a rollout by bumping an annotation
+          # Force rollout
           export TS=$(date -u +%Y%m%d%H%M%S)
           yq -i '
             .spec.template.metadata.annotations = (.spec.template.metadata.annotations // {}) |
             .spec.template.metadata.annotations["sim-fault-run"] = strenv(TS)
           ' "$FILE"
 
-          # Commit only if file changed
           if git diff --quiet -- "$FILE"; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
@@ -112,15 +112,21 @@ jobs:
           FILE: ${{ env.MANIFEST_PATH }}
         run: |
           set -euo pipefail
-          TS=$(date -u +%Y%m%d%H%M%S)
 
-          # Append a guaranteed-bad tag and force pulls
+          # Read current image and strip any existing tag
+          IMAGE=$(yq '.spec.template.spec.containers[0].image' "$FILE")
+          REPO="${IMAGE%%:*}"
+
+          # Create a guaranteed-bad tag and export it for yq
+          export TS=$(date -u +%Y%m%d%H%M%S)
+          export BAD="${REPO}:does-not-exist-${TS}"
+
+          # Apply changes
           yq -i '
-            .spec.template.spec.containers[0].image
-              |= ( . + ":does-not-exist-" + env(TS) ) |
+            .spec.template.spec.containers[0].image = strenv(BAD) |
             .spec.template.spec.containers[0].imagePullPolicy = "Always" |
             .spec.template.metadata.annotations = (.spec.template.metadata.annotations // {}) |
-            .spec.template.metadata.annotations["sim-imgpull-run"] = env(TS)
+            .spec.template.metadata.annotations["sim-imgpull-run"] = strenv(TS)
           ' "$FILE"
 
           if git diff --quiet -- "$FILE"; then
@@ -138,6 +144,7 @@ jobs:
 
       - name: Revert fault (auto-fix)
         if: steps.inject_img.outputs.changed == 'true'
+        shell: bash
         run: |
           set -euo pipefail
           git revert --no-edit HEAD

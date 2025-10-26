@@ -41,17 +41,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          set -x
           FILE="${{ env.MANIFEST_PATH }}"
+          echo "Injecting bad readinessProbe into $FILE"
+
           echo "=== BEFORE ==="
           yq e '.spec.template.spec.containers[0].readinessProbe' "$FILE" || true
+          yq e '.spec.template.metadata.annotations' "$FILE" || true
 
           # Flip readiness path to a guaranteed-bad endpoint
           yq -i '
             .spec.template.spec.containers[0].readinessProbe.httpGet.path = "/nonexistent-health"
           ' "$FILE"
 
-          # Force a rollout & ensure a textual diff even if path was already set
+          # Force a rollout & textual diff every run
           export TS=$(date -u +%Y%m%d%H%M%S)
           yq -i '
             .spec.template.metadata.annotations = (.spec.template.metadata.annotations // {}) |
@@ -62,7 +64,7 @@ jobs:
           yq e '.spec.template.spec.containers[0].readinessProbe' "$FILE" || true
           yq e '.spec.template.metadata.annotations' "$FILE" || true
 
-          echo "=== DIFF (working vs HEAD) ==="
+          echo "=== GIT DIFF ==="
           git diff -- "$FILE" || true
 
           # Only commit if the file actually changed
@@ -72,8 +74,9 @@ jobs:
             exit 0
           fi
 
-          # Commit changes (tracked file), don't fail build if commit pushes nothing
-          git commit -am "FAULT start: readinessProbe broken (sim-fault-run=$TS)" || true
+          # Commit tracked changes to the file (no .bak involved)
+          git add "$FILE"
+          git commit -m "FAULT start: readinessProbe broken (sim-fault-run=$TS)" || true
           git push || true
           echo "changed=true" >> "$GITHUB_OUTPUT"
 
@@ -88,11 +91,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          set -x
           FILE="${{ env.MANIFEST_PATH }}"
           echo "Reverting manifest to healthy state"
 
-          # Prefer a clean revert of the commit we just made; fall back to explicit restore.
+          # Cleanly revert the commit we just made; fall back to explicit restore
           if git revert --no-edit HEAD; then
             git push || true
           else
@@ -105,7 +107,8 @@ jobs:
             if git diff --quiet -- "$FILE"; then
               echo "Nothing to commit after explicit restore."
             else
-              git commit -am "FAULT end: restore readinessProbe and annotations" || true
+              git add "$FILE"
+              git commit -m "FAULT end: restore readinessProbe and annotations" || true
               git push || true
             fi
           fi

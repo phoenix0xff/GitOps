@@ -13,6 +13,14 @@ on:
         description: Minutes to keep the fault before auto-fix
         required: true
         default: "5"
+      cycles:
+        description: How many incidents to generate
+        required: true
+        default: "1"
+      cooldown_seconds:
+        description: Wait after fix before next cycle
+        required: true
+        default: "90"
 
 # Prevent overlapping runs on the same branch
 concurrency:
@@ -46,45 +54,44 @@ jobs:
           chmod +x /usr/local/bin/yq
           yq --version
 
-      - name: Inject faulty readinessProbe
-        id: inject
+      - name: Inject faulty readinessProbe (cycles)
         shell: bash
+        env:
+          FILE: ${{ env.MANIFEST_PATH }}
+          CYCLES: ${{ github.event.inputs.cycles }}
+          HOLD_MIN: ${{ github.event.inputs.duration_minutes }}
+          COOLDOWN: ${{ github.event.inputs.cooldown_seconds }}
         run: |
           set -euo pipefail
-          FILE="${{ env.MANIFEST_PATH }}"
+          : "${CYCLES:=1}" ; : "${HOLD_MIN:=1}" ; : "${COOLDOWN:=45}"
+          for i in $(seq 1 "$CYCLES"); do
+            echo "=== Cycle $i/$CYCLES: inject ==="
+            git pull --rebase --autostash || true
+            TS=$(date -u +%Y%m%d%H%M%S)
 
-          # Break readiness probe
-          yq -i '
-            .spec.template.spec.containers[0].readinessProbe.httpGet.path = "/nonexistent-health"
-          ' "$FILE"
+            yq -i '
+              (.spec.template.spec.containers[] | select(.name=="node-app")).readinessProbe.httpGet.path = "/nonexistent-health" |
+              .spec.template.metadata.annotations = (.spec.template.metadata.annotations // {}) |
+              .spec.template.metadata.annotations["sim-readiness-run"] = strenv(TS)
+            ' "$FILE"
 
-          # Force rollout
-          export TS=$(date -u +%Y%m%d%H%M%S)
-          yq -i '
-            .spec.template.metadata.annotations = (.spec.template.metadata.annotations // {}) |
-            .spec.template.metadata.annotations["sim-fault-run"] = strenv(TS)
-          ' "$FILE"
+            if git diff --quiet -- "$FILE"; then
+              echo "No changes to commit (unexpected)"; continue
+            fi
+            git add "$FILE"
+            git commit -m "FAULT (cycle $i): readinessProbe broken (sim-readiness-run=$TS)"
+            git push
 
-          if git diff --quiet -- "$FILE"; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          git add "$FILE"
-          git commit -m "FAULT start: readinessProbe broken (sim-fault-run=$TS)"
-          git push
-          echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Hold $HOLD_MIN min..."
+            sleep $((60*HOLD_MIN))
 
-      - name: Hold fault
-        if: steps.inject.outputs.changed == 'true'
-        run: sleep $(( 60 * ${{ github.event.inputs.duration_minutes }} ))
+            echo "=== Cycle $i: revert ==="
+            git revert --no-edit HEAD || true
+            git push
 
-      - name: Revert fault (auto-fix)
-        if: steps.inject.outputs.changed == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          git revert --no-edit HEAD
-          git push
+            echo "Cooldown $COOLDOWN s..."
+            sleep "$COOLDOWN"
+          done
 
   simulate-imagepull-fault:
     if: ${{ github.event.inputs.fault == 'imagepull' }}
@@ -105,51 +112,50 @@ jobs:
           curl -sL https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64 -o /usr/local/bin/yq
           chmod +x /usr/local/bin/yq
 
-      - name: Inject invalid image tag (force ImagePullBackOff)
-        id: inject_img
+      - name: Run ImagePullBackOff (cycles)
         shell: bash
         env:
           FILE: ${{ env.MANIFEST_PATH }}
+          CYCLES: ${{ github.event.inputs.cycles }}
+          HOLD_MIN: ${{ github.event.inputs.duration_minutes }}
+          COOLDOWN: ${{ github.event.inputs.cooldown_seconds }}
         run: |
           set -euo pipefail
+          : "${CYCLES:=1}" ; : "${HOLD_MIN:=1}" ; : "${COOLDOWN:=45}"
+          for i in $(seq 1 "$CYCLES"); do
+            echo "=== Cycle $i/$CYCLES: inject bad image tag ==="
+            git pull --rebase --autostash || true
 
-          # Read current image and strip any existing tag
-          IMAGE=$(yq '.spec.template.spec.containers[0].image' "$FILE")
-          REPO="${IMAGE%%:*}"
+            IMAGE=$(yq '.spec.template.spec.containers[] | select(.name=="node-app").image' "$FILE")
+            REPO="${IMAGE%%:*}"
+            TS=$(date -u +%Y%m%d%H%M%S)
+            BAD="${REPO}:does-not-exist-${TS}"
 
-          # Create a guaranteed-bad tag and export it for yq
-          export TS=$(date -u +%Y%m%d%H%M%S)
-          export BAD="${REPO}:does-not-exist-${TS}"
+            yq -i '
+              (.spec.template.spec.containers[] | select(.name=="node-app")).image = strenv(BAD) |
+              (.spec.template.spec.containers[] | select(.name=="node-app")).imagePullPolicy = "Always" |
+              .spec.template.metadata.annotations = (.spec.template.metadata.annotations // {}) |
+              .spec.template.metadata.annotations["sim-imgpull-run"] = strenv(TS)
+            ' "$FILE"
 
-          # Apply changes
-          yq -i '
-            .spec.template.spec.containers[0].image = strenv(BAD) |
-            .spec.template.spec.containers[0].imagePullPolicy = "Always" |
-            .spec.template.metadata.annotations = (.spec.template.metadata.annotations // {}) |
-            .spec.template.metadata.annotations["sim-imgpull-run"] = strenv(TS)
-          ' "$FILE"
+            if git diff --quiet -- "$FILE"; then
+              echo "No changes to commit (unexpected)"; continue
+            fi
+            git add "$FILE"
+            git commit -m "FAULT (cycle $i): invalid image tag (sim-imgpull-run=$TS)"
+            git push
 
-          if git diff --quiet -- "$FILE"; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          git add "$FILE"
-          git commit -m "FAULT start: invalid image tag (sim-imgpull-run=$TS)"
-          git push
-          echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Hold for $HOLD_MIN minute(s)..."
+            sleep $(( 60 * HOLD_MIN ))
 
-      - name: Hold fault
-        if: steps.inject_img.outputs.changed == 'true'
-        run: sleep $(( 60 * ${{ github.event.inputs.duration_minutes }} ))
+            echo "=== Cycle $i: revert ==="
+            git revert --no-edit HEAD || true
+            git push
 
-      - name: Revert fault (auto-fix)
-        if: steps.inject_img.outputs.changed == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          git revert --no-edit HEAD
-          git push
-
+            echo "Cooldown $COOLDOWN second(s)..."
+            sleep "$COOLDOWN"
+          done
+  
   simulate-crashloop-fault:
     if: ${{ github.event.inputs.fault == 'crashloop' }}
     runs-on: ubuntu-latest
@@ -170,40 +176,42 @@ jobs:
           chmod +x /usr/local/bin/yq
           yq --version
 
-      - name: Inject immediate crash (exit 1)
-        id: inject_crash
+      - name: Run CrashLoopBackOff (cycles)
         shell: bash
         env:
           FILE: ${{ env.MANIFEST_PATH }}
+          CYCLES: ${{ github.event.inputs.cycles }}
+          HOLD_MIN: ${{ github.event.inputs.duration_minutes }}
+          COOLDOWN: ${{ github.event.inputs.cooldown_seconds }}
         run: |
           set -euo pipefail
-          export TS=$(date -u +%Y%m%d%H%M%S)
+          : "${CYCLES:=1}" ; : "${HOLD_MIN:=1}" ; : "${COOLDOWN:=45}"
+          for i in $(seq 1 "$CYCLES"); do
+            echo "=== Cycle $i/$CYCLES: inject crash command ==="
+            git pull --rebase --autostash || true
+            TS=$(date -u +%Y%m%d%H%M%S)
 
-          # Overriding ENTRYPOINT/CMD so the container exits immediately with code 1
-          yq -i '
-            .spec.template.spec.containers[0].command = ["/bin/sh","-c"] |
-            .spec.template.spec.containers[0].args    = ["echo Simulated CrashLoop; exit 1"] |
-            .spec.template.metadata.annotations = (.spec.template.metadata.annotations // {}) |
-            .spec.template.metadata.annotations["sim-crashloop-run"] = strenv(TS)
-          ' "$FILE"
+            yq -i '
+              (.spec.template.spec.containers[] | select(.name=="node-app")).command = ["/bin/sh","-c"] |
+              (.spec.template.spec.containers[] | select(.name=="node-app")).args    = ["echo Simulated CrashLoop; exit 1"] |
+              .spec.template.metadata.annotations = (.spec.template.metadata.annotations // {}) |
+              .spec.template.metadata.annotations["sim-crashloop-run"] = strenv(TS)
+            ' "$FILE"
 
-          if git diff --quiet -- "$FILE"; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          git add "$FILE"
-          git commit -m "FAULT start: CrashLoopBackOff via command override (sim-crashloop-run=$TS)"
-          git push
-          echo "changed=true" >> "$GITHUB_OUTPUT"
+            if git diff --quiet -- "$FILE"; then
+              echo "No changes to commit (unexpected)"; continue
+            fi
+            git add "$FILE"
+            git commit -m "FAULT (cycle $i): CrashLoop via command override (sim-crashloop-run=$TS)"
+            git push
 
-      - name: Hold fault
-        if: steps.inject_crash.outputs.changed == 'true'
-        run: sleep $(( 60 * ${{ github.event.inputs.duration_minutes }} ))
+            echo "Hold for $HOLD_MIN minute(s)..."
+            sleep $(( 60 * HOLD_MIN ))
 
-      - name: Revert fault (auto-fix)
-        if: steps.inject_crash.outputs.changed == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          git revert --no-edit HEAD
-          git push
+            echo "=== Cycle $i: revert ==="
+            git revert --no-edit HEAD || true
+            git push
+
+            echo "Cooldown $COOLDOWN second(s)..."
+            sleep "$COOLDOWN"
+          done

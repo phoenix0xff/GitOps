@@ -7,7 +7,7 @@ on:
         description: Which fault to run
         required: true
         type: choice
-        options: [readiness, imagepull]
+        options: [readiness, imagepull, crashloop]
         default: readiness
       duration_minutes:
         description: Minutes to keep the fault before auto-fix
@@ -144,6 +144,64 @@ jobs:
 
       - name: Revert fault (auto-fix)
         if: steps.inject_img.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git revert --no-edit HEAD
+          git push
+
+  simulate-crashloop-fault:
+    if: ${{ github.event.inputs.fault == 'crashloop' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout manifests repo
+        uses: actions/checkout@v4
+        with:
+          token: ${{ env.PERSONAL_ACCESS_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name  "${{ env.GIT_USERNAME }}"
+          git config user.email "${{ env.GIT_EMAIL }}"
+
+      - name: Install yq
+        run: |
+          curl -sL https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64 -o /usr/local/bin/yq
+          chmod +x /usr/local/bin/yq
+          yq --version
+
+      - name: Inject immediate crash (exit 1)
+        id: inject_crash
+        shell: bash
+        env:
+          FILE: ${{ env.MANIFEST_PATH }}
+        run: |
+          set -euo pipefail
+          export TS=$(date -u +%Y%m%d%H%M%S)
+
+          # Overriding ENTRYPOINT/CMD so the container exits immediately with code 1
+          yq -i '
+            .spec.template.spec.containers[0].command = ["/bin/sh","-c"] |
+            .spec.template.spec.containers[0].args    = ["echo Simulated CrashLoop; exit 1"] |
+            .spec.template.metadata.annotations = (.spec.template.metadata.annotations // {}) |
+            .spec.template.metadata.annotations["sim-crashloop-run"] = strenv(TS)
+          ' "$FILE"
+
+          if git diff --quiet -- "$FILE"; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git add "$FILE"
+          git commit -m "FAULT start: CrashLoopBackOff via command override (sim-crashloop-run=$TS)"
+          git push
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Hold fault
+        if: steps.inject_crash.outputs.changed == 'true'
+        run: sleep $(( 60 * ${{ github.event.inputs.duration_minutes }} ))
+
+      - name: Revert fault (auto-fix)
+        if: steps.inject_crash.outputs.changed == 'true'
         shell: bash
         run: |
           set -euo pipefail

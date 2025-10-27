@@ -17,10 +17,10 @@ on:
         description: How many incidents to generate
         required: true
         default: "1"
-      cooldown_seconds:
+      cooldown_seconds: # should be relatively high since I have 1min "for:" and 1min group_interval
         description: Wait after fix before next cycle
         required: true
-        default: "90"
+        default: "150"
 
 # Prevent overlapping runs on the same branch
 concurrency:

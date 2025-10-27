@@ -11,8 +11,6 @@ spec:
     metadata:
       labels:
         app: node-app
-      annotations:
-        sim-crashloop-run: "20251027213519"
     spec:
       containers:
         - name: node-app
@@ -25,8 +23,3 @@ spec:
               port: 3000
             initialDelaySeconds: 5
             periodSeconds: 5
-          command:
-            - /bin/sh
-            - -c
-          args:
-            - echo Simulated CrashLoop; exit 1

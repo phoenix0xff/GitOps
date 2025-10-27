@@ -69,7 +69,7 @@ jobs:
             git pull --rebase --autostash || true
             TS=$(date -u +%Y%m%d%H%M%S)
 
-            yq -i '
+            TS="$TS" yq -i '
               (.spec.template.spec.containers[] | select(.name=="node-app")).readinessProbe.httpGet.path = "/nonexistent-health" |
               .spec.template.metadata.annotations = (.spec.template.metadata.annotations // {}) |
               .spec.template.metadata.annotations["sim-readiness-run"] = strenv(TS)
@@ -126,12 +126,13 @@ jobs:
             echo "=== Cycle $i/$CYCLES: inject bad image tag ==="
             git pull --rebase --autostash || true
 
-            IMAGE=$(yq '.spec.template.spec.containers[] | select(.name=="node-app").image' "$FILE")
+            # read current image (raw) and build a bad tag
+            IMAGE=$(yq -r '.spec.template.spec.containers[] | select(.name=="node-app").image' "$FILE")
             REPO="${IMAGE%%:*}"
             TS=$(date -u +%Y%m%d%H%M%S)
             BAD="${REPO}:does-not-exist-${TS}"
 
-            yq -i '
+            TS="$TS" BAD="$BAD" yq -i '
               (.spec.template.spec.containers[] | select(.name=="node-app")).image = strenv(BAD) |
               (.spec.template.spec.containers[] | select(.name=="node-app")).imagePullPolicy = "Always" |
               .spec.template.metadata.annotations = (.spec.template.metadata.annotations // {}) |
@@ -191,7 +192,7 @@ jobs:
             git pull --rebase --autostash || true
             TS=$(date -u +%Y%m%d%H%M%S)
 
-            yq -i '
+            TS="$TS" yq -i '
               (.spec.template.spec.containers[] | select(.name=="node-app")).command = ["/bin/sh","-c"] |
               (.spec.template.spec.containers[] | select(.name=="node-app")).args    = ["echo Simulated CrashLoop; exit 1"] |
               .spec.template.metadata.annotations = (.spec.template.metadata.annotations // {}) |

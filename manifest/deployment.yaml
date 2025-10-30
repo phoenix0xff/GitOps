@@ -11,12 +11,10 @@ spec:
     metadata:
       labels:
         app: node-app
-      annotations:
-        sim-imgpull-run: "20251030004452"
     spec:
       containers:
         - name: node-app
-          image: ens19kav/my-app:does-not-exist-20251030004452
+          image: ens19kav/my-app:76dec1de2eaa39bb4109474e44b82f4646eb4bc1
           ports:
             - containerPort: 3000
           readinessProbe:
@@ -25,4 +23,3 @@ spec:
               port: 3000
             initialDelaySeconds: 5
             periodSeconds: 5
-          imagePullPolicy: Always

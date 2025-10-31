@@ -3,7 +3,7 @@ kind: Deployment
 metadata:
   name: node-app-deployment
   annotations:
-    dora.dev/source-commit: 0767c7feea3179edb679f6ee21c18e073ba0a049
+    dora.dev/source-commit: 5992e83f1f721353727d0dc553f46b3b9c74800e
 spec:
   replicas: 2
   selector:
@@ -14,11 +14,11 @@ spec:
       labels:
         app: node-app
       annotations:
-        org.opencontainers.image.revision: 0767c7feea3179edb679f6ee21c18e073ba0a049
+        org.opencontainers.image.revision: 5992e83f1f721353727d0dc553f46b3b9c74800e
     spec:
       containers:
         - name: node-app
-          image: ens19kav/my-app:0767c7feea3179edb679f6ee21c18e073ba0a049
+          image: ens19kav/my-app:5992e83f1f721353727d0dc553f46b3b9c74800e
           ports:
             - containerPort: 3000
           readinessProbe:

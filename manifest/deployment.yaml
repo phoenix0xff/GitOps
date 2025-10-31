@@ -15,6 +15,7 @@ spec:
         app: node-app
       annotations:
         org.opencontainers.image.revision: 96891e268d305cad361f388f8aef7b6cc0c8868f
+        sim-readiness-run: "20251031164406"
     spec:
       containers:
         - name: node-app
@@ -23,7 +24,7 @@ spec:
             - containerPort: 3000
           readinessProbe:
             httpGet:
-              path: /
+              path: /nonexistent-health
               port: 3000
             initialDelaySeconds: 5
             periodSeconds: 5

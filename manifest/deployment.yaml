@@ -15,11 +15,10 @@ spec:
         app: node-app
       annotations:
         org.opencontainers.image.revision: f2a65ad97637c2578730de0540316b08101ad4de
-        sim-imgpull-run: "20251101115215"
     spec:
       containers:
         - name: node-app
-          image: ens19kav/my-app:does-not-exist-20251101115215
+          image: ens19kav/my-app:f2a65ad97637c2578730de0540316b08101ad4de
           ports:
             - containerPort: 3000
           readinessProbe:
@@ -28,4 +27,3 @@ spec:
               port: 3000
             initialDelaySeconds: 5
             periodSeconds: 5
-          imagePullPolicy: Always

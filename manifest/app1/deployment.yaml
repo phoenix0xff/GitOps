@@ -15,6 +15,7 @@ spec:
         app: node-app1
       annotations:
         org.opencontainers.image.revision: c23ca69b362d215904944374754e5c265dfd01d0
+        sim-crashloop-run: "20251103195752"
     spec:
       containers:
         - name: node-app1
@@ -27,3 +28,8 @@ spec:
               port: 3000
             initialDelaySeconds: 5
             periodSeconds: 5
+          command:
+            - /bin/sh
+            - -c
+          args:
+            - echo Simulated CrashLoop; exit 1

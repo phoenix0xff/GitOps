@@ -3,6 +3,16 @@ name: Simulate Fault (GitOps)
 on:
   workflow_dispatch:
     inputs:
+      app:
+        description: Which app folder (under manifest/) to target
+        required: true
+        type: choice
+        options: [app1, app2] # only have to modify this upon adding new apps
+        default: app1
+      container_name:
+        description: Name of the container in the deployment
+        required: true
+        default: node-app1
       fault:
         description: Which fault to run
         required: true
@@ -28,7 +38,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  MANIFEST_PATH: manifest/deployment.yaml
+  MANIFEST_PATH: manifest/${{ github.event.inputs.app }}/deployment.yaml
   GIT_EMAIL: ${{ secrets.GIT_EMAIL }}
   GIT_USERNAME: ${{ secrets.GIT_USERNAME }}
   PERSONAL_ACCESS_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
@@ -58,6 +68,7 @@ jobs:
         shell: bash
         env:
           FILE: ${{ env.MANIFEST_PATH }}
+          CN: ${{ github.event.inputs.container_name }}
           CYCLES: ${{ github.event.inputs.cycles }}
           HOLD_MIN: ${{ github.event.inputs.duration_minutes }}
           COOLDOWN: ${{ github.event.inputs.cooldown_seconds }}
@@ -70,7 +81,7 @@ jobs:
             TS=$(date -u +%Y%m%d%H%M%S)
 
             TS="$TS" yq -i '
-              (.spec.template.spec.containers[] | select(.name=="node-app")).readinessProbe.httpGet.path = "/nonexistent-health" |
+              (.spec.template.spec.containers[] | select(.name==env(CN))).readinessProbe.httpGet.path = "/nonexistent-health" |
               .spec.template.metadata.annotations = (.spec.template.metadata.annotations // {}) |
               .spec.template.metadata.annotations["sim-readiness-run"] = strenv(TS)
             ' "$FILE"
@@ -116,6 +127,7 @@ jobs:
         shell: bash
         env:
           FILE: ${{ env.MANIFEST_PATH }}
+          CN: ${{ github.event.inputs.container_name }}
           CYCLES: ${{ github.event.inputs.cycles }}
           HOLD_MIN: ${{ github.event.inputs.duration_minutes }}
           COOLDOWN: ${{ github.event.inputs.cooldown_seconds }}
@@ -127,14 +139,14 @@ jobs:
             git pull --rebase --autostash || true
 
             # read current image (raw) and build a bad tag
-            IMAGE=$(yq -r '.spec.template.spec.containers[] | select(.name=="node-app").image' "$FILE")
+            IMAGE=$(yq -r '.spec.template.spec.containers[] | select(.name==env(CN)).image' "$FILE")
             REPO="${IMAGE%%:*}"
             TS=$(date -u +%Y%m%d%H%M%S)
             BAD="${REPO}:does-not-exist-${TS}"
 
             TS="$TS" BAD="$BAD" yq -i '
-              (.spec.template.spec.containers[] | select(.name=="node-app")).image = strenv(BAD) |
-              (.spec.template.spec.containers[] | select(.name=="node-app")).imagePullPolicy = "Always" |
+              (.spec.template.spec.containers[] | select(.name==env(CN))).image = strenv(BAD) |
+              (.spec.template.spec.containers[] | select(.name==env(CN))).imagePullPolicy = "Always" |
               .spec.template.metadata.annotations = (.spec.template.metadata.annotations // {}) |
               .spec.template.metadata.annotations["sim-imgpull-run"] = strenv(TS)
             ' "$FILE"
@@ -181,6 +193,7 @@ jobs:
         shell: bash
         env:
           FILE: ${{ env.MANIFEST_PATH }}
+          CN: ${{ github.event.inputs.container_name }}
           CYCLES: ${{ github.event.inputs.cycles }}
           HOLD_MIN: ${{ github.event.inputs.duration_minutes }}
           COOLDOWN: ${{ github.event.inputs.cooldown_seconds }}
@@ -193,8 +206,8 @@ jobs:
             TS=$(date -u +%Y%m%d%H%M%S)
 
             TS="$TS" yq -i '
-              (.spec.template.spec.containers[] | select(.name=="node-app")).command = ["/bin/sh","-c"] |
-              (.spec.template.spec.containers[] | select(.name=="node-app")).args    = ["echo Simulated CrashLoop; exit 1"] |
+              (.spec.template.spec.containers[] | select(.name==env(CN))).command = ["/bin/sh","-c"] |
+              (.spec.template.spec.containers[] | select(.name==env(CN))).args = ["echo Simulated CrashLoop; exit 1"] |
               .spec.template.metadata.annotations = (.spec.template.metadata.annotations // {}) |
               .spec.template.metadata.annotations["sim-crashloop-run"] = strenv(TS)
             ' "$FILE"

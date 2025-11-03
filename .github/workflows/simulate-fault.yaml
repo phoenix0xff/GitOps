@@ -1,0 +1,218 @@
+name: Simulate Fault (GitOps)
+
+on:
+  workflow_dispatch:
+    inputs:
+      fault:
+        description: Which fault to run
+        required: true
+        type: choice
+        options: [readiness, imagepull, crashloop]
+        default: readiness
+      duration_minutes:
+        description: Minutes to keep the fault before auto-fix
+        required: true
+        default: "5"
+      cycles:
+        description: How many incidents to generate
+        required: true
+        default: "1"
+      cooldown_seconds: # should be relatively high since I have 1min "for:" and 1min group_interval
+        description: Wait after fix before next cycle
+        required: true
+        default: "150"
+
+# Prevent overlapping runs on the same branch
+concurrency:
+  group: sim-fault-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  MANIFEST_PATH: manifest/deployment.yaml
+  GIT_EMAIL: ${{ secrets.GIT_EMAIL }}
+  GIT_USERNAME: ${{ secrets.GIT_USERNAME }}
+  PERSONAL_ACCESS_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+
+jobs:
+  simulate-readiness-fault:
+    if: ${{ github.event.inputs.fault == 'readiness' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout manifests repo
+        uses: actions/checkout@v4
+        with:
+          token: ${{ env.PERSONAL_ACCESS_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name  "${{ env.GIT_USERNAME }}"
+          git config user.email "${{ env.GIT_EMAIL }}"
+
+      - name: Install yq
+        run: |
+          curl -sL https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64 -o /usr/local/bin/yq
+          chmod +x /usr/local/bin/yq
+          yq --version
+
+      - name: Inject faulty readinessProbe (cycles)
+        shell: bash
+        env:
+          FILE: ${{ env.MANIFEST_PATH }}
+          CYCLES: ${{ github.event.inputs.cycles }}
+          HOLD_MIN: ${{ github.event.inputs.duration_minutes }}
+          COOLDOWN: ${{ github.event.inputs.cooldown_seconds }}
+        run: |
+          set -euo pipefail
+          : "${CYCLES:=1}" ; : "${HOLD_MIN:=1}" ; : "${COOLDOWN:=45}"
+          for i in $(seq 1 "$CYCLES"); do
+            echo "=== Cycle $i/$CYCLES: inject ==="
+            git pull --rebase --autostash || true
+            TS=$(date -u +%Y%m%d%H%M%S)
+
+            TS="$TS" yq -i '
+              (.spec.template.spec.containers[] | select(.name=="node-app")).readinessProbe.httpGet.path = "/nonexistent-health" |
+              .spec.template.metadata.annotations = (.spec.template.metadata.annotations // {}) |
+              .spec.template.metadata.annotations["sim-readiness-run"] = strenv(TS)
+            ' "$FILE"
+
+            if git diff --quiet -- "$FILE"; then
+              echo "No changes to commit (unexpected)"; continue
+            fi
+            git add "$FILE"
+            git commit -m "FAULT (cycle $i): readinessProbe broken (sim-readiness-run=$TS)"
+            git push
+
+            echo "Hold $HOLD_MIN min..."
+            sleep $((60*HOLD_MIN))
+
+            echo "=== Cycle $i: revert ==="
+            git revert --no-edit HEAD || true
+            git push
+
+            echo "Cooldown $COOLDOWN s..."
+            sleep "$COOLDOWN"
+          done
+
+  simulate-imagepull-fault:
+    if: ${{ github.event.inputs.fault == 'imagepull' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout manifests repo
+        uses: actions/checkout@v4
+        with:
+          token: ${{ env.PERSONAL_ACCESS_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name  "${{ env.GIT_USERNAME }}"
+          git config user.email "${{ env.GIT_EMAIL }}"
+
+      - name: Install yq
+        run: |
+          curl -sL https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64 -o /usr/local/bin/yq
+          chmod +x /usr/local/bin/yq
+
+      - name: Run ImagePullBackOff (cycles)
+        shell: bash
+        env:
+          FILE: ${{ env.MANIFEST_PATH }}
+          CYCLES: ${{ github.event.inputs.cycles }}
+          HOLD_MIN: ${{ github.event.inputs.duration_minutes }}
+          COOLDOWN: ${{ github.event.inputs.cooldown_seconds }}
+        run: |
+          set -euo pipefail
+          : "${CYCLES:=1}" ; : "${HOLD_MIN:=1}" ; : "${COOLDOWN:=45}"
+          for i in $(seq 1 "$CYCLES"); do
+            echo "=== Cycle $i/$CYCLES: inject bad image tag ==="
+            git pull --rebase --autostash || true
+
+            # read current image (raw) and build a bad tag
+            IMAGE=$(yq -r '.spec.template.spec.containers[] | select(.name=="node-app").image' "$FILE")
+            REPO="${IMAGE%%:*}"
+            TS=$(date -u +%Y%m%d%H%M%S)
+            BAD="${REPO}:does-not-exist-${TS}"
+
+            TS="$TS" BAD="$BAD" yq -i '
+              (.spec.template.spec.containers[] | select(.name=="node-app")).image = strenv(BAD) |
+              (.spec.template.spec.containers[] | select(.name=="node-app")).imagePullPolicy = "Always" |
+              .spec.template.metadata.annotations = (.spec.template.metadata.annotations // {}) |
+              .spec.template.metadata.annotations["sim-imgpull-run"] = strenv(TS)
+            ' "$FILE"
+
+            if git diff --quiet -- "$FILE"; then
+              echo "No changes to commit (unexpected)"; continue
+            fi
+            git add "$FILE"
+            git commit -m "FAULT (cycle $i): invalid image tag (sim-imgpull-run=$TS)"
+            git push
+
+            echo "Hold for $HOLD_MIN minute(s)..."
+            sleep $(( 60 * HOLD_MIN ))
+
+            echo "=== Cycle $i: revert ==="
+            git revert --no-edit HEAD || true
+            git push
+
+            echo "Cooldown $COOLDOWN second(s)..."
+            sleep "$COOLDOWN"
+          done
+  
+  simulate-crashloop-fault:
+    if: ${{ github.event.inputs.fault == 'crashloop' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout manifests repo
+        uses: actions/checkout@v4
+        with:
+          token: ${{ env.PERSONAL_ACCESS_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name  "${{ env.GIT_USERNAME }}"
+          git config user.email "${{ env.GIT_EMAIL }}"
+
+      - name: Install yq
+        run: |
+          curl -sL https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64 -o /usr/local/bin/yq
+          chmod +x /usr/local/bin/yq
+          yq --version
+
+      - name: Run CrashLoopBackOff (cycles)
+        shell: bash
+        env:
+          FILE: ${{ env.MANIFEST_PATH }}
+          CYCLES: ${{ github.event.inputs.cycles }}
+          HOLD_MIN: ${{ github.event.inputs.duration_minutes }}
+          COOLDOWN: ${{ github.event.inputs.cooldown_seconds }}
+        run: |
+          set -euo pipefail
+          : "${CYCLES:=1}" ; : "${HOLD_MIN:=1}" ; : "${COOLDOWN:=45}"
+          for i in $(seq 1 "$CYCLES"); do
+            echo "=== Cycle $i/$CYCLES: inject crash command ==="
+            git pull --rebase --autostash || true
+            TS=$(date -u +%Y%m%d%H%M%S)
+
+            TS="$TS" yq -i '
+              (.spec.template.spec.containers[] | select(.name=="node-app")).command = ["/bin/sh","-c"] |
+              (.spec.template.spec.containers[] | select(.name=="node-app")).args    = ["echo Simulated CrashLoop; exit 1"] |
+              .spec.template.metadata.annotations = (.spec.template.metadata.annotations // {}) |
+              .spec.template.metadata.annotations["sim-crashloop-run"] = strenv(TS)
+            ' "$FILE"
+
+            if git diff --quiet -- "$FILE"; then
+              echo "No changes to commit (unexpected)"; continue
+            fi
+            git add "$FILE"
+            git commit -m "FAULT (cycle $i): CrashLoop via command override (sim-crashloop-run=$TS)"
+            git push
+
+            echo "Hold for $HOLD_MIN minute(s)..."
+            sleep $(( 60 * HOLD_MIN ))
+
+            echo "=== Cycle $i: revert ==="
+            git revert --no-edit HEAD || true
+            git push
+
+            echo "Cooldown $COOLDOWN second(s)..."
+            sleep "$COOLDOWN"
+          done

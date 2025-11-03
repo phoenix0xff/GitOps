@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: node-app2-deployment
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: node-app2
+  template:
+    metadata:
+      labels:
+        app: node-app2
+    spec:
+      containers:
+        - name: node-app2
+          image: ens19kav/my-app2:PLACEHOLDER
+          ports:
+            - containerPort: 3000
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 5

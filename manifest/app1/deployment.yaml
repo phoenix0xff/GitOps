@@ -2,8 +2,6 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: node-app1-deployment
-  annotations:
-    dora.dev/source-commit: 72c266071ec1767f5bf4a5125f23d67dadd157fe
 spec:
   replicas: 2
   selector:

@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: node-app3-deployment
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: node-app3
+  template:
+    metadata:
+      labels:
+        app: node-app3
+      annotations:
+        org.opencontainers.image.revision: ded91783b44889f5ddb198ff7d012f91ac3e96d4
+    spec:
+      containers:
+        - name: node-app3
+          image: ens19kav/my-app3:main-1
+          ports:
+            - containerPort: 3000
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 5

@@ -7,7 +7,7 @@ on:
         description: Which app folder (under manifest/) to target
         required: true
         type: choice
-        options: [app1, app2] # only have to modify this upon adding new apps
+        options: [app1, app2, app3] # only have to modify this upon adding new apps
         default: app1
       container_name:
         description: Name of the container in the deployment

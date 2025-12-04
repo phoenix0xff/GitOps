@@ -12,11 +12,11 @@ spec:
       labels:
         app: node-app1
       annotations:
-        org.opencontainers.image.revision: 2a3fc8820430d6a456576e9d3888c8000b85cbf4
+        org.opencontainers.image.revision: c37662c251961e87542d1074088ff9e4baa18b7f
     spec:
       containers:
         - name: node-app1
-          image: ens19kav/my-app1:main-70
+          image: ens19kav/my-app1:main-71
           ports:
             - containerPort: 3000
           readinessProbe:
